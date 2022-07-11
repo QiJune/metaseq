@@ -781,13 +781,17 @@ class TransformerDecoder(IncrementalDecoder):
         # Note: we are only storing the embeddings output and output of final transformer block
         # instead of all inner representations, as thats the only thing being logged and storing
         # all intermediate representation causes OOM for large models during validation.
-        inner_states: List[Optional[Tensor]] = [{"tok": tok, "pos": pos, "emb": x}]
+        inner_states: List[Optional[Tensor]] = [{"tok": tok, "emb": x}]
+        if pos is not None:
+            inner_states["pos"] = pos
         if encoder_out is None:
             l_aux = []
         else:
             l_aux = encoder_out["l_aux"] if "l_aux" in encoder_out else []
+
+        self_attn_states = []
         for idx, layer in enumerate(self.layers):
-            x, layer_attn, _, l_aux_i = layer(
+            outputs = layer(
                 x,
                 encoder_out=encoder_out["encoder_out"][0]
                 if (encoder_out is not None and len(encoder_out["encoder_out"]) > 0)
@@ -804,9 +808,14 @@ class TransformerDecoder(IncrementalDecoder):
                 need_attn=bool((idx == alignment_layer)),
                 need_head_weights=bool((idx == alignment_layer)),
             )
-            l_aux.append(l_aux_i)
-            if layer_attn is not None and idx == alignment_layer:
-                attn = layer_attn.float().to(x)
+            if len(outputs) == 4:
+                x, layer_attn, _, l_aux_i = outputs
+                l_aux.append(l_aux_i)
+                if layer_attn is not None and idx == alignment_layer:
+                    attn = layer_attn.float().to(x)
+            elif len(outputs) == 3:
+                x, layer_attn, self_attn_state = outputs
+                self_attn_states.append(self_attn_state)
 
         inner_states.append(x)
         if attn is not None:
@@ -825,7 +834,14 @@ class TransformerDecoder(IncrementalDecoder):
         if self.project_out_dim is not None:
             x = self.project_out_dim(x)
 
-        return x, {"attn": [attn], "inner_states": inner_states, "l_aux": l_aux}
+        extra = {"inner_states": inner_states}
+        if len(self_attn_states) > 0:
+            extra["self_attn_states"] = self_attn_states
+        if len(l_aux) > 0 and all([i is not None for i in l_aux]):
+            extra["l_aux"] = l_aux
+        if attn is not None:
+            extra["attn"] = attn
+        return x, extra
 
     def output_layer(self, features):
         """Project features to the vocabulary size."""

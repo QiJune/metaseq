@@ -19,11 +19,21 @@ except ImportError:
     has_fused_bias_gelu = False
 
 
+try:
+    from megatron import fused_kernels
+
+    has_fused_kernels = True
+except ImportError:
+    has_fused_kernels = False
+
 def load_megatron_fused_kernel():
     """Compile and load fused kernels from Megatron."""
     if getattr(load_megatron_fused_kernel, "has_run", False):
         return
     load_megatron_fused_kernel.has_run = True
+
+    if not has_fused_kernels:
+        return
 
     from megatron import fused_kernels
     from argparse import Namespace
